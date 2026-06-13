@@ -11,6 +11,10 @@ const RawItemSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
+  quantityPerBox: {
+    type: Number,
+    default: 0
+  },
   restaurant: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Restaurant',

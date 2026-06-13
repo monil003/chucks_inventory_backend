@@ -214,6 +214,84 @@ router.post('/save-final', async (req, res) => {
   }
 });
 
+// @route   POST /api/sessions/save-sales
+// @desc    Save manual sales data for a specific date
+router.post('/save-sales', async (req, res) => {
+  const { date, salesData, salesFile } = req.body;
+  if (!date || !salesData || !Array.isArray(salesData)) {
+    return res.status(400).json({ error: 'Date and salesData array are required' });
+  }
+
+  try {
+    const targetDate = new Date(date);
+    targetDate.setUTCHours(0,0,0,0);
+
+    let session = await InventorySession.findOne({ date: targetDate, restaurant: req.restaurantId });
+    const allRawItems = await RawItem.find({ restaurant: req.restaurantId });
+
+    if (!session) {
+      session = new InventorySession({
+        restaurant: req.restaurantId,
+        date: targetDate,
+        status: 'active',
+        initialInventory: allRawItems.map(item => ({ rawItemId: item._id, quantity: 0 })),
+        salesData: [],
+        actualFinalInventory: allRawItems.map(item => ({ rawItemId: item._id, quantity: 0 })),
+        calculatedUsage: [],
+        variance: []
+      });
+    }
+
+    const recipes = await Recipe.find({ restaurant: req.restaurantId });
+    const usageMap = {};
+    
+    allRawItems.forEach(item => {
+      usageMap[item._id.toString()] = 0;
+    });
+
+    const formattedSales = salesData.map(s => ({
+      sku: (s.sku || '').trim(),
+      name: (s.name || '').trim(),
+      quantitySold: Number(s.quantitySold) || 0,
+      price: Number(s.price) || 0
+    })).filter(s => s.sku !== '');
+
+    formattedSales.forEach(saleItem => {
+      const recipe = recipes.find(r => r.menuItemSku === saleItem.sku);
+      if (recipe) {
+        recipe.ingredients.forEach(ing => {
+          const rawIdStr = ing.rawItemId.toString();
+          if (usageMap[rawIdStr] !== undefined) {
+            usageMap[rawIdStr] += saleItem.quantitySold * ing.quantity;
+          }
+        });
+      }
+    });
+
+    const calculatedUsage = Object.keys(usageMap).map(rawIdStr => ({
+      rawItemId: rawIdStr,
+      quantity: usageMap[rawIdStr]
+    }));
+
+    session.salesFile = salesFile || 'Manually Entered';
+    session.salesData = formattedSales;
+    session.calculatedUsage = calculatedUsage;
+
+    await recalculateSessionVariance(session);
+    await session.save();
+
+    const populated = await InventorySession.findById(session._id)
+      .populate('initialInventory.rawItemId')
+      .populate('calculatedUsage.rawItemId')
+      .populate('actualFinalInventory.rawItemId')
+      .populate('variance.rawItemId');
+
+    res.json(populated);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // @route   POST /api/sessions/upload-sales
 // @desc    Upload Day End Sales CSV and calculate expected usage for a specific date
 router.post('/upload-sales', upload.single('file'), async (req, res) => {
@@ -273,7 +351,8 @@ router.post('/upload-sales', upload.single('file'), async (req, res) => {
             salesMap[sku] = {
               sku,
               name,
-              quantitySold: totalQty
+              quantitySold: totalQty,
+              price: 0
             };
           }
         }

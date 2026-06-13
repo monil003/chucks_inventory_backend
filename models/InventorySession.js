@@ -38,6 +38,10 @@ const InventorySessionSchema = new mongoose.Schema({
       quantitySold: {
         type: Number,
         default: 0
+      },
+      price: {
+        type: Number,
+        default: 0
       }
     }
   ],

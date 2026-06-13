@@ -53,6 +53,30 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// @route   PUT /api/raw-items/:id
+// @desc    Update a raw item
+router.put('/:id', async (req, res) => {
+  const { name, unit } = req.body;
+  if (!name || !unit) {
+    return res.status(400).json({ error: 'Name and Unit are required' });
+  }
+  try {
+    const item = await RawItem.findById(req.params.id);
+    if (!item) {
+      return res.status(404).json({ error: 'Item not found' });
+    }
+    item.name = name.trim();
+    item.unit = unit.trim();
+    await item.save();
+    res.json(item);
+  } catch (err) {
+    if (err.code === 11000) {
+      return res.status(400).json({ error: 'Raw Item with this name already exists' });
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // @route   POST /api/raw-items/upload-order-guide
 // @desc    Upload Order Guide CSV and upsert raw items
 router.post('/upload-order-guide', upload.single('file'), async (req, res) => {

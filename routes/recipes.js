@@ -3,10 +3,10 @@ const router = express.Router();
 const Recipe = require('../models/Recipe');
 
 // @route   GET /api/recipes
-// @desc    Get all recipes
+// @desc    Get all recipes for the active restaurant
 router.get('/', async (req, res) => {
   try {
-    const recipes = await Recipe.find()
+    const recipes = await Recipe.find({ restaurant: req.restaurantId })
       .populate('ingredients.rawItemId')
       .sort({ menuItemName: 1 });
     res.json(recipes);
@@ -16,7 +16,7 @@ router.get('/', async (req, res) => {
 });
 
 // @route   POST /api/recipes
-// @desc    Create or update a recipe
+// @desc    Create or update a recipe for the active restaurant
 router.post('/', async (req, res) => {
   const { menuItemSku, menuItemName, ingredients } = req.body;
   if (!menuItemSku || !menuItemName || !ingredients || !Array.isArray(ingredients)) {
@@ -32,8 +32,8 @@ router.post('/', async (req, res) => {
 
     // Find if recipe exists and update, or create a new one
     const recipe = await Recipe.findOneAndUpdate(
-      { menuItemSku },
-      { menuItemName, ingredients: formattedIngredients },
+      { menuItemSku, restaurant: req.restaurantId },
+      { menuItemName, ingredients: formattedIngredients, restaurant: req.restaurantId },
       { new: true, upsert: true }
     ).populate('ingredients.rawItemId');
 
@@ -47,11 +47,11 @@ router.post('/', async (req, res) => {
 // @desc    Delete a recipe
 router.delete('/:id', async (req, res) => {
   try {
-    const recipe = await Recipe.findById(req.params.id);
+    const recipe = await Recipe.findOne({ _id: req.params.id, restaurant: req.restaurantId });
     if (!recipe) {
       return res.status(404).json({ error: 'Recipe not found' });
     }
-    await Recipe.deleteOne({ _id: req.params.id });
+    await Recipe.deleteOne({ _id: req.params.id, restaurant: req.restaurantId });
     res.json({ message: 'Recipe deleted' });
   } catch (err) {
     res.status(500).json({ error: err.message });

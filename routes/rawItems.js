@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const RawItem = require('../models/RawItem');
+const Restaurant = require('../models/Restaurant');
 const multer = require('multer');
 const fs = require('fs');
 const csv = require('csv-parser');
@@ -9,10 +10,10 @@ const upload = multer({ dest: 'uploads/' });
 
 
 // @route   GET /api/raw-items
-// @desc    Get all raw items
+// @desc    Get all raw items for the active restaurant
 router.get('/', async (req, res) => {
   try {
-    const items = await RawItem.find().sort({ name: 1 });
+    const items = await RawItem.find({ restaurant: req.restaurantId }).sort({ name: 1 });
     res.json(items);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -20,14 +21,14 @@ router.get('/', async (req, res) => {
 });
 
 // @route   POST /api/raw-items
-// @desc    Create a raw item
+// @desc    Create a raw item for the active restaurant
 router.post('/', async (req, res) => {
   const { name, unit } = req.body;
   if (!name || !unit) {
     return res.status(400).json({ error: 'Name and Unit are required' });
   }
   try {
-    const newItem = new RawItem({ name, unit });
+    const newItem = new RawItem({ name: name.trim(), unit: unit.trim(), restaurant: req.restaurantId });
     await newItem.save();
     res.status(201).json(newItem);
   } catch (err) {
@@ -42,11 +43,11 @@ router.post('/', async (req, res) => {
 // @desc    Delete a raw item
 router.delete('/:id', async (req, res) => {
   try {
-    const item = await RawItem.findById(req.params.id);
+    const item = await RawItem.findOne({ _id: req.params.id, restaurant: req.restaurantId });
     if (!item) {
       return res.status(404).json({ error: 'Item not found' });
     }
-    await RawItem.deleteOne({ _id: req.params.id });
+    await RawItem.deleteOne({ _id: req.params.id, restaurant: req.restaurantId });
     res.json({ message: 'Item deleted' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -61,7 +62,7 @@ router.put('/:id', async (req, res) => {
     return res.status(400).json({ error: 'Name and Unit are required' });
   }
   try {
-    const item = await RawItem.findById(req.params.id);
+    const item = await RawItem.findOne({ _id: req.params.id, restaurant: req.restaurantId });
     if (!item) {
       return res.status(404).json({ error: 'Item not found' });
     }
@@ -84,60 +85,73 @@ router.post('/upload-order-guide', upload.single('file'), async (req, res) => {
     return res.status(400).json({ error: 'Please upload a CSV file' });
   }
 
-  const uniqueItems = {};
+  try {
+    const restaurant = await Restaurant.findById(req.restaurantId);
+    const mapping = restaurant?.csvMapping || {
+      orderGuideNameKey: 'Description',
+      orderGuideUnitKey: 'Unit Measure'
+    };
 
-  fs.createReadStream(req.file.path)
-    .pipe(csv())
-    .on('data', (row) => {
-      const keys = Object.keys(row);
-      const descKey = keys.find(k => k.trim() === 'Description') || 'Description';
-      const unitKey = keys.find(k => k.trim() === 'Unit Measure') || 'Unit Measure';
+    const uniqueItems = {};
 
-      const name = (row[descKey] || '').trim();
-      const unit = (row[unitKey] || '').trim();
+    fs.createReadStream(req.file.path)
+      .pipe(csv())
+      .on('data', (row) => {
+        const nameKey = mapping.orderGuideNameKey || 'Description';
+        const unitKey = mapping.orderGuideUnitKey || 'Unit Measure';
 
-      if (name) {
-        uniqueItems[name] = unit || 'pcs';
-      }
-    })
-    .on('end', async () => {
-      try {
-        fs.unlinkSync(req.file.path);
+        const name = (row[nameKey] || row['Description'] || '').trim();
+        const unit = (row[unitKey] || row['Unit Measure'] || '').trim();
 
-        const names = Object.keys(uniqueItems);
-        if (names.length === 0) {
-          return res.status(400).json({ error: 'No valid ingredients found in the CSV file' });
+        if (name) {
+          uniqueItems[name] = unit || 'pcs';
         }
+      })
+      .on('end', async () => {
+        try {
+          fs.unlinkSync(req.file.path);
 
-        const bulkOps = names.map(name => ({
-          updateOne: {
-            filter: { name },
-            update: {
-              $set: { unit: uniqueItems[name] }
-            },
-            upsert: true
+          const names = Object.keys(uniqueItems);
+          if (names.length === 0) {
+            return res.status(400).json({ error: 'No valid ingredients found in the CSV file' });
           }
-        }));
 
-        const result = await RawItem.bulkWrite(bulkOps);
+          const bulkOps = names.map(name => ({
+            updateOne: {
+              filter: { name, restaurant: req.restaurantId },
+              update: {
+                $set: { unit: uniqueItems[name] },
+                $setOnInsert: { restaurant: req.restaurantId }
+              },
+              upsert: true
+            }
+          }));
 
-        res.json({
-          success: true,
-          totalProcessed: names.length,
-          upsertedCount: result.upsertedCount,
-          modifiedCount: result.modifiedCount,
-          matchedCount: result.matchedCount
-        });
-      } catch (err) {
-        res.status(500).json({ error: err.message });
-      }
-    })
-    .on('error', (err) => {
-      if (fs.existsSync(req.file.path)) {
-        fs.unlinkSync(req.file.path);
-      }
-      res.status(500).json({ error: `Failed to parse CSV: ${err.message}` });
-    });
+          const result = await RawItem.bulkWrite(bulkOps);
+
+          res.json({
+            success: true,
+            totalProcessed: names.length,
+            upsertedCount: result.upsertedCount,
+            modifiedCount: result.modifiedCount,
+            matchedCount: result.matchedCount
+          });
+        } catch (err) {
+          res.status(500).json({ error: err.message });
+        }
+      })
+      .on('error', (err) => {
+        if (fs.existsSync(req.file.path)) {
+          fs.unlinkSync(req.file.path);
+        }
+        res.status(500).json({ error: `Failed to parse CSV: ${err.message}` });
+      });
+  } catch (err) {
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = router;

@@ -19,9 +19,16 @@ const MenuItemSchema = new mongoose.Schema({
   type: {
     type: String,
     index: true
+  },
+  restaurant: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Restaurant',
+    required: true
   }
 }, {
   timestamps: true
 });
+
+MenuItemSchema.index({ item_sku_code: 1, restaurant: 1 });
 
 module.exports = mongoose.model('MenuItem', MenuItemSchema);

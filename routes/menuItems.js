@@ -7,14 +7,12 @@ const MenuItem = require('../models/MenuItem');
 router.get('/', async (req, res) => {
   const { query } = req.query;
   try {
-    let filter = {};
+    let filter = { restaurant: req.restaurantId };
     if (query) {
-      filter = {
-        $or: [
-          { name: { $regex: query, $options: 'i' } },
-          { item_sku_code: { $regex: query, $options: 'i' } }
-        ]
-      };
+      filter.$or = [
+        { name: { $regex: query, $options: 'i' } },
+        { item_sku_code: { $regex: query, $options: 'i' } }
+      ];
     }
     // We only care about items of type 'Item' or 'Add-on' since they can be sold/used.
     // Let's return the matching items, limiting to 20 results for performance

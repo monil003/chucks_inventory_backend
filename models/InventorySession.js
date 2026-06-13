@@ -1,6 +1,11 @@
 const mongoose = require('mongoose');
 
 const InventorySessionSchema = new mongoose.Schema({
+  restaurant: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Restaurant',
+    required: true
+  },
   date: {
     type: Date,
     default: Date.now

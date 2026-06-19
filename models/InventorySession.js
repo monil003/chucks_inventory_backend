@@ -15,6 +15,29 @@ const InventorySessionSchema = new mongoose.Schema({
     enum: ['active', 'completed'],
     default: 'active'
   },
+  startDate: {
+    type: Date
+  },
+  endDate: {
+    type: Date
+  },
+  deliveries: [
+    {
+      rawItemId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'RawItem',
+        required: true
+      },
+      quantity: {
+        type: Number,
+        default: 0
+      },
+      price: {
+        type: Number,
+        default: 0
+      }
+    }
+  ],
   initialInventory: [
     {
       rawItemId: {

@@ -7,6 +7,7 @@ const InventorySession = require('../models/InventorySession');
 const Recipe = require('../models/Recipe');
 const RawItem = require('../models/RawItem');
 const Restaurant = require('../models/Restaurant');
+const geminiService = require('../services/geminiService');
 
 const upload = multer({ dest: 'uploads/' });
 
@@ -629,6 +630,234 @@ router.delete('/:id', async (req, res) => {
     }
     await InventorySession.deleteOne({ _id: req.params.id, restaurant: req.restaurantId });
     res.json({ message: 'Session deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// @route   POST /api/sessions/parse-invoice
+// @desc    Upload an invoice (PDF/Image) and call Gemini API to parse items and map to ingredients
+router.post('/parse-invoice', upload.single('file'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'Please upload an invoice file' });
+  }
+
+  try {
+    const rawItems = await RawItem.find({ restaurant: req.restaurantId }).sort({ name: 1 });
+    const fileBuffer = fs.readFileSync(req.file.path);
+    const mimeType = req.file.mimetype;
+
+    const parsedData = await geminiService.extractInvoice(fileBuffer, mimeType, rawItems);
+    
+    // Clean up temporary file
+    fs.unlinkSync(req.file.path);
+
+    res.json(parsedData);
+  } catch (err) {
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// @route   POST /api/sessions/parse-sales-report
+// @desc    Upload a sales report (PDF/CSV/Excel/Image) and call Gemini API to extract menu sales
+router.post('/parse-sales-report', upload.single('file'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'Please upload a sales report file' });
+  }
+
+  try {
+    const fileBuffer = fs.readFileSync(req.file.path);
+    const mimeType = req.file.mimetype;
+
+    const parsedData = await geminiService.extractSalesReport(fileBuffer, mimeType);
+    
+    // Clean up temporary file
+    fs.unlinkSync(req.file.path);
+
+    res.json(parsedData);
+  } catch (err) {
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// @route   POST /api/sessions/generate-interval-report
+// @desc    Generate a period-bounded audit report and save to DB
+router.post('/generate-interval-report', async (req, res) => {
+  const { startDate, endDate, deliveries, endingCounts, salesData, salesFile } = req.body;
+  if (!startDate || !endDate || !endingCounts || !salesData) {
+    return res.status(400).json({ error: 'startDate, endDate, endingCounts, and salesData are required' });
+  }
+
+  try {
+    const parsedStart = new Date(startDate);
+    parsedStart.setUTCHours(0,0,0,0);
+    const parsedEnd = new Date(endDate);
+    parsedEnd.setUTCHours(0,0,0,0);
+
+    const allRawItems = await RawItem.find({ restaurant: req.restaurantId });
+    const recipes = await Recipe.find({ restaurant: req.restaurantId });
+
+    // 1. Fetch starting inventory (from the session on the startDate if exists)
+    const startSession = await InventorySession.findOne({
+      restaurant: req.restaurantId,
+      date: parsedStart
+    });
+
+    const startingMap = {};
+    allRawItems.forEach(item => {
+      startingMap[item._id.toString()] = 0;
+    });
+
+    if (startSession) {
+      const inventoryToUse = startSession.actualFinalInventory && startSession.actualFinalInventory.length > 0
+        ? startSession.actualFinalInventory 
+        : startSession.initialInventory;
+      
+      inventoryToUse.forEach(item => {
+        const id = (item.rawItemId._id || item.rawItemId).toString();
+        startingMap[id] = item.quantity;
+      });
+    }
+
+    // 2. Map deliveries
+    const deliveryMap = {};
+    allRawItems.forEach(item => {
+      deliveryMap[item._id.toString()] = 0;
+    });
+    if (Array.isArray(deliveries)) {
+      deliveries.forEach(d => {
+        const id = d.rawItemId;
+        if (id && deliveryMap[id.toString()] !== undefined) {
+          deliveryMap[id.toString()] += Number(d.quantity) || 0;
+        }
+      });
+    }
+
+    // 3. Map ending counts
+    const endingMap = {};
+    allRawItems.forEach(item => {
+      endingMap[item._id.toString()] = 0;
+    });
+    if (Array.isArray(endingCounts)) {
+      endingCounts.forEach(c => {
+        const id = c.rawItemId;
+        if (id && endingMap[id.toString()] !== undefined) {
+          endingMap[id.toString()] = Number(c.quantity) || 0;
+        }
+      });
+    }
+
+    // 4. Calculate recipe depletion (Sold)
+    const usageMap = {};
+    allRawItems.forEach(item => {
+      usageMap[item._id.toString()] = 0;
+    });
+
+    const formattedSales = salesData.map(s => ({
+      sku: (s.sku || '').trim(),
+      name: (s.name || '').trim(),
+      quantitySold: Number(s.quantitySold) || 0,
+      price: Number(s.price) || 0
+    })).filter(s => s.sku !== '');
+
+    formattedSales.forEach(saleItem => {
+      const recipe = recipes.find(r => r.menuItemSku === saleItem.sku);
+      if (recipe) {
+        recipe.ingredients.forEach(ing => {
+          const rawIdStr = ing.rawItemId.toString();
+          if (usageMap[rawIdStr] !== undefined) {
+            usageMap[rawIdStr] += saleItem.quantitySold * ing.quantity;
+          }
+        });
+      }
+    });
+
+    // 5. Build variance array
+    const varianceData = [];
+    allRawItems.forEach(item => {
+      const idStr = item._id.toString();
+      const initial = startingMap[idStr] || 0;
+      const delivery = deliveryMap[idStr] || 0;
+      const sold = usageMap[idStr] || 0;
+      const actualFinal = endingMap[idStr] || 0;
+
+      // Used = Starting + Delivery - Ending
+      const used = (initial + delivery) - actualFinal;
+      // Lost = Used - Sold
+      const lost = used - sold;
+
+      const expectedFinal = Math.max(0, initial + delivery - sold);
+
+      varianceData.push({
+        rawItemId: item._id,
+        initial: initial,
+        usage: sold,
+        expectedFinal: expectedFinal,
+        actualFinal: actualFinal,
+        varianceValue: lost
+      });
+    });
+
+    // 6. Create/Overwrite the session on the endDate
+    let session = await InventorySession.findOne({
+      restaurant: req.restaurantId,
+      date: parsedEnd
+    });
+
+    if (!session) {
+      session = new InventorySession({
+        restaurant: req.restaurantId,
+        date: parsedEnd
+      });
+    }
+
+    session.startDate = parsedStart;
+    session.endDate = parsedEnd;
+    session.status = 'completed';
+
+    // Store deliveries
+    session.deliveries = allRawItems.map(item => ({
+      rawItemId: item._id,
+      quantity: deliveryMap[item._id.toString()] || 0,
+      price: 0
+    }));
+
+    // Store counts
+    session.initialInventory = allRawItems.map(item => ({
+      rawItemId: item._id,
+      quantity: startingMap[item._id.toString()] || 0
+    }));
+
+    session.actualFinalInventory = allRawItems.map(item => ({
+      rawItemId: item._id,
+      quantity: endingMap[item._id.toString()] || 0
+    }));
+
+    session.salesData = formattedSales;
+    session.salesFile = salesFile || 'Gemini AI Extract';
+    
+    session.calculatedUsage = allRawItems.map(item => ({
+      rawItemId: item._id,
+      quantity: usageMap[item._id.toString()] || 0
+    }));
+
+    session.variance = varianceData;
+
+    await session.save();
+
+    const populated = await InventorySession.findById(session._id)
+      .populate('initialInventory.rawItemId')
+      .populate('actualFinalInventory.rawItemId')
+      .populate('calculatedUsage.rawItemId')
+      .populate('variance.rawItemId');
+
+    res.json(populated);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

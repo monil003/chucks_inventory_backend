@@ -16,7 +16,7 @@ const requireManager = (req, res, next) => {
 // @route   POST /api/manager/staff
 // @desc    Create a staff user credentials for a specific restaurant
 router.post('/staff', requireManager, async (req, res) => {
-  const { username, password, restaurantId } = req.body;
+  const { username, password, restaurantId, role } = req.body;
   if (!username || !password || !restaurantId) {
     return res.status(400).json({ error: 'Username, password, and restaurantId are required' });
   }
@@ -27,10 +27,13 @@ router.post('/staff', requireManager, async (req, res) => {
       return res.status(400).json({ error: 'Username/Email already exists' });
     }
 
+    const allowedRoles = ['manager', 'staff', 'food_access', 'liquor_access'];
+    const finalRole = allowedRoles.includes(role) ? role : 'food_access';
+
     const newStaff = new User({
       username: username.trim().toLowerCase(),
       password: hashPassword(password),
-      role: 'staff',
+      role: finalRole,
       approved: true, // staff created by manager are approved by default
       restaurants: [restaurantId]
     });
@@ -51,7 +54,10 @@ router.get('/staff', requireManager, async (req, res) => {
   }
 
   try {
-    const staff = await User.find({ role: 'staff', restaurants: restaurantId });
+    const staff = await User.find({ 
+      restaurants: restaurantId,
+      role: { $in: ['manager', 'staff', 'food_access', 'liquor_access'] }
+    });
     res.json(staff);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -117,6 +123,68 @@ router.put('/restaurants/:id/csv-mapping', requireManager, async (req, res) => {
 
     await restaurant.save();
     res.json(restaurant);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// @route   PUT /api/manager/staff/:id
+// @desc    Update staff credentials & role
+router.put('/staff/:id', requireManager, async (req, res) => {
+  const { username, password, role } = req.body;
+  try {
+    const staffMember = await User.findOne({ 
+      _id: req.params.id,
+      role: { $in: ['manager', 'staff', 'food_access', 'liquor_access'] }
+    });
+    
+    if (!staffMember) {
+      return res.status(404).json({ error: 'Staff member not found' });
+    }
+    
+    if (username && username.trim().toLowerCase() !== staffMember.username) {
+      const existing = await User.findOne({ username: username.trim().toLowerCase() });
+      if (existing) {
+        return res.status(400).json({ error: 'Username/Email already exists' });
+      }
+      staffMember.username = username.trim().toLowerCase();
+    }
+    
+    if (password && password.trim()) {
+      staffMember.password = hashPassword(password);
+    }
+    
+    if (role) {
+      const allowedRoles = ['manager', 'staff', 'food_access', 'liquor_access'];
+      if (allowedRoles.includes(role)) {
+        staffMember.role = role;
+      } else {
+        return res.status(400).json({ error: 'Invalid role permission' });
+      }
+    }
+    
+    await staffMember.save();
+    res.json({ _id: staffMember._id, username: staffMember.username, role: staffMember.role });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// @route   DELETE /api/manager/staff/:id
+// @desc    Delete staff credentials
+router.delete('/staff/:id', requireManager, async (req, res) => {
+  try {
+    const staffMember = await User.findOne({ 
+      _id: req.params.id,
+      role: { $in: ['manager', 'staff', 'food_access', 'liquor_access'] }
+    });
+    
+    if (!staffMember) {
+      return res.status(404).json({ error: 'Staff member not found' });
+    }
+    
+    await User.deleteOne({ _id: req.params.id });
+    res.json({ message: 'Staff member credentials deleted successfully' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

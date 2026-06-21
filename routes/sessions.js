@@ -21,6 +21,14 @@ const recalculateSessionVariance = async (session) => {
     initialMap[idStr] = item.quantity;
   });
 
+  const deliveryMap = {};
+  if (session.deliveries) {
+    session.deliveries.forEach(item => {
+      const idStr = (item.rawItemId._id || item.rawItemId).toString();
+      deliveryMap[idStr] = item.quantity;
+    });
+  }
+
   const usageMap = {};
   session.calculatedUsage.forEach(item => {
     const idStr = (item.rawItemId._id || item.rawItemId).toString();
@@ -37,8 +45,9 @@ const recalculateSessionVariance = async (session) => {
   allRawItems.forEach(item => {
     const itemIdStr = item._id.toString();
     const initial = initialMap[itemIdStr] || 0;
+    const delivery = deliveryMap[itemIdStr] || 0;
     const usage = usageMap[itemIdStr] || 0;
-    const expectedFinal = Math.max(0, initial - usage);
+    const expectedFinal = Math.max(0, initial + delivery - usage);
     const actualFinal = actualMap[itemIdStr] || 0;
     const varianceValue = actualFinal - expectedFinal;
 
@@ -72,6 +81,7 @@ router.get('/', async (req, res) => {
   try {
     const sessions = await InventorySession.find({ restaurant: req.restaurantId })
       .populate('initialInventory.rawItemId')
+      .populate('deliveries.rawItemId')
       .populate('actualFinalInventory.rawItemId')
       .populate('calculatedUsage.rawItemId')
       .populate('variance.rawItemId')
@@ -98,6 +108,7 @@ router.get('/by-date', async (req, res) => {
       date: targetDate
     })
     .populate('initialInventory.rawItemId')
+    .populate('deliveries.rawItemId')
     .populate('actualFinalInventory.rawItemId')
     .populate('calculatedUsage.rawItemId')
     .populate('variance.rawItemId');
@@ -138,12 +149,13 @@ router.post('/save-initial', async (req, res) => {
         status: 'active',
         initialInventory: formattedInitial,
         salesData: [],
-        actualFinalInventory: allRawItems.map(item => ({ rawItemId: item._id, quantity: 0 })),
+        actualFinalInventory: formattedInitial,
         calculatedUsage: [],
         variance: []
       });
     } else {
       session.initialInventory = formattedInitial;
+      session.actualFinalInventory = formattedInitial;
     }
 
     await recalculateSessionVariance(session);
@@ -190,7 +202,7 @@ router.post('/save-final', async (req, res) => {
         restaurant: req.restaurantId,
         date: targetDate,
         status: 'active',
-        initialInventory: allRawItems.map(item => ({ rawItemId: item._id, quantity: 0 })),
+        initialInventory: formattedActual,
         salesData: [],
         actualFinalInventory: formattedActual,
         calculatedUsage: [],
@@ -198,6 +210,7 @@ router.post('/save-final', async (req, res) => {
       });
     } else {
       session.actualFinalInventory = formattedActual;
+      session.initialInventory = formattedActual;
     }
 
     await recalculateSessionVariance(session);
@@ -283,6 +296,59 @@ router.post('/save-sales', async (req, res) => {
 
     const populated = await InventorySession.findById(session._id)
       .populate('initialInventory.rawItemId')
+      .populate('calculatedUsage.rawItemId')
+      .populate('actualFinalInventory.rawItemId')
+      .populate('variance.rawItemId');
+
+    res.json(populated);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// @route   POST /api/sessions/save-deliveries
+// @desc    Save manual deliveries data for a specific date
+router.post('/save-deliveries', async (req, res) => {
+  const { date, deliveries } = req.body;
+  if (!date || !deliveries || !Array.isArray(deliveries)) {
+    return res.status(400).json({ error: 'Date and deliveries array are required' });
+  }
+
+  try {
+    const targetDate = new Date(date);
+    targetDate.setUTCHours(0,0,0,0);
+
+    let session = await InventorySession.findOne({ date: targetDate, restaurant: req.restaurantId });
+    const allRawItems = await RawItem.find({ restaurant: req.restaurantId });
+
+    if (!session) {
+      session = new InventorySession({
+        restaurant: req.restaurantId,
+        date: targetDate,
+        status: 'active',
+        initialInventory: allRawItems.map(item => ({ rawItemId: item._id, quantity: 0 })),
+        deliveries: [],
+        salesData: [],
+        actualFinalInventory: allRawItems.map(item => ({ rawItemId: item._id, quantity: 0 })),
+        calculatedUsage: [],
+        variance: []
+      });
+    }
+
+    const formattedDeliveries = deliveries.map(d => ({
+      rawItemId: d.rawItemId,
+      quantity: Number(d.quantity) || 0,
+      price: Number(d.price) || 0
+    })).filter(d => d.rawItemId);
+
+    session.deliveries = formattedDeliveries;
+
+    await recalculateSessionVariance(session);
+    await session.save();
+
+    const populated = await InventorySession.findById(session._id)
+      .populate('initialInventory.rawItemId')
+      .populate('deliveries.rawItemId')
       .populate('calculatedUsage.rawItemId')
       .populate('actualFinalInventory.rawItemId')
       .populate('variance.rawItemId');
@@ -703,10 +769,14 @@ router.post('/generate-interval-report', async (req, res) => {
     const allRawItems = await RawItem.find({ restaurant: req.restaurantId });
     const recipes = await Recipe.find({ restaurant: req.restaurantId });
 
-    // 1. Fetch starting inventory (from the session on the startDate if exists)
-    const startSession = await InventorySession.findOne({
+    // 1. Fetch starting inventory: sum of all counts in [startDate, endDate) (exclusive of endDate)
+    const dateQuery = parsedEnd > parsedStart
+      ? { $gte: parsedStart, $lt: parsedEnd }
+      : parsedStart;
+
+    const startingSessions = await InventorySession.find({
       restaurant: req.restaurantId,
-      date: parsedStart
+      date: dateQuery
     });
 
     const startingMap = {};
@@ -714,16 +784,21 @@ router.post('/generate-interval-report', async (req, res) => {
       startingMap[item._id.toString()] = 0;
     });
 
-    if (startSession) {
-      const inventoryToUse = startSession.actualFinalInventory && startSession.actualFinalInventory.length > 0
-        ? startSession.actualFinalInventory 
-        : startSession.initialInventory;
+    startingSessions.forEach(sess => {
+      const inventoryToUse = sess.actualFinalInventory && sess.actualFinalInventory.length > 0
+        ? sess.actualFinalInventory 
+        : sess.initialInventory;
       
-      inventoryToUse.forEach(item => {
-        const id = (item.rawItemId._id || item.rawItemId).toString();
-        startingMap[id] = item.quantity;
-      });
-    }
+      if (inventoryToUse) {
+        inventoryToUse.forEach(item => {
+          if (!item.rawItemId) return;
+          const id = (item.rawItemId._id || item.rawItemId).toString();
+          if (startingMap[id] !== undefined) {
+            startingMap[id] += Number(item.quantity) || 0;
+          }
+        });
+      }
+    });
 
     // 2. Map deliveries
     const deliveryMap = {};

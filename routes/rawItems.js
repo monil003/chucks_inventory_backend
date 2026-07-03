@@ -13,7 +13,7 @@ const upload = multer({ dest: 'uploads/' });
 // @desc    Get all raw items for the active restaurant
 router.get('/', async (req, res) => {
   try {
-    const items = await RawItem.find({ restaurant: req.restaurantId }).sort({ name: 1 });
+    const items = await RawItem.find({ restaurant: req.restaurantId }).sort({ _id: 1 });
     res.json(items);
   } catch (err) {
     res.status(500).json({ error: err.message });

@@ -879,6 +879,73 @@ router.post('/generate-interval-report', async (req, res) => {
       });
     });
 
+    // Save deliveries to their specific dates
+    if (Array.isArray(deliveries)) {
+      const deliveriesByDate = {};
+      deliveries.forEach(d => {
+        if (!d.rawItemId) return;
+        const dDate = d.date ? new Date(d.date) : new Date(parsedEnd);
+        dDate.setUTCHours(0,0,0,0);
+        const dStr = dDate.toISOString().split('T')[0];
+        if (!deliveriesByDate[dStr]) {
+          deliveriesByDate[dStr] = [];
+        }
+        deliveriesByDate[dStr].push(d);
+      });
+
+      // Clear deliveries of other daily sessions in the range that don't have deliveries in the payload
+      const allDatesInRange = [];
+      let tempDate = new Date(parsedStart);
+      while (tempDate <= parsedEnd) {
+        allDatesInRange.push(tempDate.toISOString().split('T')[0]);
+        tempDate.setDate(tempDate.getDate() + 1);
+      }
+
+      for (const dateStr of allDatesInRange) {
+        const dDate = new Date(dateStr);
+        dDate.setUTCHours(0,0,0,0);
+        const dailyDeliveries = deliveriesByDate[dateStr] || [];
+
+        // Skip the endDate session's daily updates because we will save to the endDate session separately
+        if (dateStr === parsedEnd.toISOString().split('T')[0]) {
+          continue;
+        }
+
+        let dailySession = await InventorySession.findOne({
+          restaurant: req.restaurantId,
+          date: dDate
+        });
+
+        if (!dailySession && dailyDeliveries.length > 0) {
+          dailySession = new InventorySession({
+            restaurant: req.restaurantId,
+            date: dDate,
+            status: 'active',
+            initialInventory: allRawItems.map(item => ({ rawItemId: item._id, quantity: 0 })),
+            actualFinalInventory: allRawItems.map(item => ({ rawItemId: item._id, quantity: 0 })),
+            salesData: [],
+            calculatedUsage: [],
+            variance: []
+          });
+        }
+
+        if (dailySession) {
+          const formatted = allRawItems.map(item => {
+            const match = dailyDeliveries.find(d => d.rawItemId.toString() === item._id.toString());
+            return {
+              rawItemId: item._id,
+              quantity: match ? (Number(match.quantity) || 0) : 0,
+              price: match ? (Number(match.price) || 0) : 0
+            };
+          });
+
+          dailySession.deliveries = formatted;
+          await recalculateSessionVariance(dailySession);
+          await dailySession.save();
+        }
+      }
+    }
+
     // 6. Create/Overwrite the session on the endDate
     let session = await InventorySession.findOne({
       restaurant: req.restaurantId,

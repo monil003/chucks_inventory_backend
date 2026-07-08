@@ -16,7 +16,7 @@ async function extractInvoice(fileBuffer, mimeType, rawIngredients = []) {
 
   const prompt = `
 You are an expert invoice processing assistant for a restaurant.
-Analyze this invoice document and extract all delivery items/ingredients received.
+Analyze this invoice document and extract all delivery items/ingredients received. Also, locate and extract the invoice date or delivery date.
 For each item, extract:
 1. The description or name of the item.
 2. The quantity received.
@@ -31,6 +31,7 @@ If it does not match any ingredient in our database, leave "rawItemId" null.
 
 Your response must be a valid JSON object matching the following structure:
 {
+  "invoiceDate": "YYYY-MM-DD", // Extract the date from the invoice/delivery note, formatted as YYYY-MM-DD. Use null if not found.
   "deliveries": [
     {
       "name": "Extracted Item Name",

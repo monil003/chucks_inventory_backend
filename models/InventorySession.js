@@ -120,9 +120,20 @@ const InventorySessionSchema = new mongoose.Schema({
       varianceValue: {
         type: Number,
         default: 0
+      },
+      actualUsage: {
+        type: Number,
+        default: 0
       }
     }
-  ]
+  ],
+  summaryStats: {
+    totalSales: { type: Number, default: 0 },
+    totalFoodCost: { type: Number, default: 0 },
+    accurateFoodCost: { type: Number, default: 0 },
+    percentageFoodCost: { type: Number, default: 0 },
+    percentageAccurateFoodCost: { type: Number, default: 0 }
+  }
 }, {
   timestamps: true
 });

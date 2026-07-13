@@ -23,7 +23,7 @@ router.get('/', async (req, res) => {
 // @route   POST /api/raw-items
 // @desc    Create a raw item for the active restaurant
 router.post('/', async (req, res) => {
-  const { name, unit, quantityPerBox, price } = req.body;
+  const { name, unit, quantityPerBox, price, isAccurateCount } = req.body;
   if (!name || !unit) {
     return res.status(400).json({ error: 'Name and Unit are required' });
   }
@@ -33,7 +33,8 @@ router.post('/', async (req, res) => {
       unit: unit.trim(), 
       restaurant: req.restaurantId,
       quantityPerBox: Number(quantityPerBox) || 0,
-      price: Number(price) || 0
+      price: Number(price) || 0,
+      isAccurateCount: Boolean(isAccurateCount)
     });
     await newItem.save();
     res.status(201).json(newItem);
@@ -63,7 +64,7 @@ router.delete('/:id', async (req, res) => {
 // @route   PUT /api/raw-items/:id
 // @desc    Update a raw item
 router.put('/:id', async (req, res) => {
-  const { name, unit, quantityPerBox, price } = req.body;
+  const { name, unit, quantityPerBox, price, isAccurateCount } = req.body;
   if (!name || !unit) {
     return res.status(400).json({ error: 'Name and Unit are required' });
   }
@@ -79,6 +80,9 @@ router.put('/:id', async (req, res) => {
     }
     if (price !== undefined) {
       item.price = Number(price) || 0;
+    }
+    if (isAccurateCount !== undefined) {
+      item.isAccurateCount = Boolean(isAccurateCount);
     }
     await item.save();
     res.json(item);

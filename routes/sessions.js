@@ -853,8 +853,16 @@ router.post('/generate-interval-report', async (req, res) => {
       }
     });
 
-    // 5. Build variance array
+    // 5. Build variance array and calculate stats
     const varianceData = [];
+    let totalSales = 0;
+    formattedSales.forEach(s => {
+      totalSales += s.quantitySold * s.price;
+    });
+
+    let totalFoodCost = 0;
+    let accurateFoodCost = 0;
+
     allRawItems.forEach(item => {
       const idStr = item._id.toString();
       const initial = startingMap[idStr] || 0;
@@ -869,15 +877,33 @@ router.post('/generate-interval-report', async (req, res) => {
 
       const expectedFinal = Math.max(0, initial + delivery - sold);
 
+      const itemCost = used * (item.price || 0);
+      totalFoodCost += itemCost;
+      if (item.isAccurateCount) {
+        accurateFoodCost += itemCost;
+      }
+
       varianceData.push({
         rawItemId: item._id,
         initial: initial,
         usage: sold,
         expectedFinal: expectedFinal,
         actualFinal: actualFinal,
-        varianceValue: lost
+        varianceValue: lost,
+        actualUsage: used
       });
     });
+
+    const percentageFoodCost = totalSales > 0 ? (totalFoodCost / totalSales) * 100 : 0;
+    const percentageAccurateFoodCost = totalSales > 0 ? (accurateFoodCost / totalSales) * 100 : 0;
+
+    const summaryStats = {
+      totalSales,
+      totalFoodCost,
+      accurateFoodCost,
+      percentageFoodCost,
+      percentageAccurateFoodCost
+    };
 
     // Save deliveries to their specific dates
     if (Array.isArray(deliveries)) {
@@ -990,6 +1016,7 @@ router.post('/generate-interval-report', async (req, res) => {
     }));
 
     session.variance = varianceData;
+    session.summaryStats = summaryStats;
 
     await session.save();
 

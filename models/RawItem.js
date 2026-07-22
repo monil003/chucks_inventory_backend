@@ -15,6 +15,14 @@ const RawItemSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  packagesPerBox: {
+    type: Number,
+    default: 0
+  },
+  quantityPerPackage: {
+    type: Number,
+    default: 0
+  },
   price: {
     type: Number,
     default: 0

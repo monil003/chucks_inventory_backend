@@ -23,16 +23,22 @@ router.get('/', async (req, res) => {
 // @route   POST /api/raw-items
 // @desc    Create a raw item for the active restaurant
 router.post('/', async (req, res) => {
-  const { name, unit, quantityPerBox, price, isAccurateCount } = req.body;
+  const { name, unit, quantityPerBox, packagesPerBox, quantityPerPackage, price, isAccurateCount } = req.body;
   if (!name || !unit) {
     return res.status(400).json({ error: 'Name and Unit are required' });
   }
   try {
+    const ppb = Number(packagesPerBox) || 0;
+    const qpp = Number(quantityPerPackage) || 0;
+    const qpb = (ppb > 0 && qpp > 0) ? (ppb * qpp) : (Number(quantityPerBox) || 0);
+
     const newItem = new RawItem({ 
       name: name.trim(), 
       unit: unit.trim(), 
       restaurant: req.restaurantId,
-      quantityPerBox: Number(quantityPerBox) || 0,
+      quantityPerBox: qpb,
+      packagesPerBox: ppb,
+      quantityPerPackage: qpp,
       price: Number(price) || 0,
       isAccurateCount: Boolean(isAccurateCount)
     });
@@ -64,7 +70,7 @@ router.delete('/:id', async (req, res) => {
 // @route   PUT /api/raw-items/:id
 // @desc    Update a raw item
 router.put('/:id', async (req, res) => {
-  const { name, unit, quantityPerBox, price, isAccurateCount } = req.body;
+  const { name, unit, quantityPerBox, packagesPerBox, quantityPerPackage, price, isAccurateCount } = req.body;
   if (!name || !unit) {
     return res.status(400).json({ error: 'Name and Unit are required' });
   }
@@ -75,9 +81,19 @@ router.put('/:id', async (req, res) => {
     }
     item.name = name.trim();
     item.unit = unit.trim();
-    if (quantityPerBox !== undefined) {
+
+    const ppb = packagesPerBox !== undefined ? Number(packagesPerBox) : item.packagesPerBox;
+    const qpp = quantityPerPackage !== undefined ? Number(quantityPerPackage) : item.quantityPerPackage;
+
+    item.packagesPerBox = ppb || 0;
+    item.quantityPerPackage = qpp || 0;
+
+    if (ppb > 0 && qpp > 0) {
+      item.quantityPerBox = ppb * qpp;
+    } else if (quantityPerBox !== undefined) {
       item.quantityPerBox = Number(quantityPerBox) || 0;
     }
+
     if (price !== undefined) {
       item.price = Number(price) || 0;
     }

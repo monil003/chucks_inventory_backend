@@ -769,7 +769,7 @@ router.post('/generate-interval-report', async (req, res) => {
     const allRawItems = await RawItem.find({ restaurant: req.restaurantId });
     const recipes = await Recipe.find({ restaurant: req.restaurantId });
 
-    // 1. Fetch starting inventory: sum of all counts in [startDate, endDate) (exclusive of endDate)
+    // 1. Fetch starting inventory: count of the earliest session in [startDate, endDate) (exclusive of endDate)
     const dateQuery = parsedEnd > parsedStart
       ? { $gte: parsedStart, $lt: parsedEnd }
       : parsedStart;
@@ -777,28 +777,29 @@ router.post('/generate-interval-report', async (req, res) => {
     const startingSessions = await InventorySession.find({
       restaurant: req.restaurantId,
       date: dateQuery
-    });
+    }).sort({ date: 1 });
 
     const startingMap = {};
     allRawItems.forEach(item => {
       startingMap[item._id.toString()] = 0;
     });
 
-    startingSessions.forEach(sess => {
-      const inventoryToUse = sess.actualFinalInventory && sess.actualFinalInventory.length > 0
-        ? sess.actualFinalInventory 
-        : sess.initialInventory;
+    if (startingSessions.length > 0) {
+      const earliestSess = startingSessions[0];
+      const inventoryToUse = earliestSess.actualFinalInventory && earliestSess.actualFinalInventory.length > 0
+        ? earliestSess.actualFinalInventory 
+        : earliestSess.initialInventory;
       
       if (inventoryToUse) {
         inventoryToUse.forEach(item => {
           if (!item.rawItemId) return;
           const id = (item.rawItemId._id || item.rawItemId).toString();
           if (startingMap[id] !== undefined) {
-            startingMap[id] += Number(item.quantity) || 0;
+            startingMap[id] = Number(item.quantity) || 0;
           }
         });
       }
-    });
+    }
 
     // 2. Map deliveries
     const deliveryMap = {};

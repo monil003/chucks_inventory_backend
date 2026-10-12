@@ -11,6 +11,7 @@ const recipesRouter = require('./routes/recipes');
 const sessionsRouter = require('./routes/sessions');
 const adminRouter = require('./routes/admin');
 const managerRouter = require('./routes/manager');
+const liquorRouter = require('./routes/liquor');
 const { router: authRouter, hashPassword } = require('./routes/auth');
 const User = require('./models/User');
 const Restaurant = require('./models/Restaurant');
@@ -94,6 +95,34 @@ const seedDefaultUsers = async () => {
         updated = true;
       }
       if (updated) await staffUser.save();
+    }
+
+    // Seed frontstaff user for liquor count access
+    const frontstaffUser = await User.findOne({ username: 'frontstaff' });
+    if (!frontstaffUser) {
+      await User.create({
+        username: 'frontstaff',
+        password: hashPassword('frontstaff123'),
+        role: 'liquor_access',
+        approved: true,
+        restaurants: [defaultRest._id]
+      });
+      console.log('Seeded frontstaff user');
+    } else {
+      let updated = false;
+      if (frontstaffUser.approved === undefined || !frontstaffUser.approved) {
+        frontstaffUser.approved = true;
+        updated = true;
+      }
+      if (frontstaffUser.role !== 'liquor_access') {
+        frontstaffUser.role = 'liquor_access';
+        updated = true;
+      }
+      if (!frontstaffUser.restaurants || frontstaffUser.restaurants.length === 0) {
+        frontstaffUser.restaurants = [defaultRest._id];
+        updated = true;
+      }
+      if (updated) await frontstaffUser.save();
     }
 
     // Seed devarsh.2023@gmail.com user as manager of Chuck's Kitchen
@@ -223,6 +252,7 @@ app.use('/api/raw-items', requireRestaurant, rawItemsRouter);
 app.use('/api/menu-items', requireRestaurant, menuItemsRouter);
 app.use('/api/recipes', requireRestaurant, recipesRouter);
 app.use('/api/sessions', requireRestaurant, sessionsRouter);
+app.use('/api/liquor', requireRestaurant, liquorRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/manager', managerRouter);
